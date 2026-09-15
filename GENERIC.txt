@@ -57,3 +57,84 @@ python -c "from pathlib import Path; import pandas as pd; p=next(Path('local_tes
 
 
 python -c "from pathlib import Path; import pandas as pd,yaml,unicodedata; p=next(Path('local_test/input').glob('*.xlsx')); df=pd.read_excel(p,sheet_name='Remarketing',nrows=2); cfg=yaml.safe_load(open('config/workbook_config.yaml',encoding='utf-8')); expected=(cfg.get('required_columns',[])+cfg.get('business_keys',[])+cfg.get('text_columns',[])); print('CONFIG VS WORKBOOK'); [print('\nCONFIG=',repr(e),[f'U+{ord(x):04X}' for x in str(e)],'\nMATCHES=',[(repr(c),[f'U+{ord(x):04X}' for x in str(c)]) for c in df.columns if unicodedata.normalize('NFKC',str(c)).replace('\xa0',' ').replace('\u200b','').strip().casefold()==unicodedata.normalize('NFKC',str(e)).replace('\xa0',' ').replace('\u200b','').strip().casefold()]) for e in expected]"
+
+
+
+def inventory_age_days(
+    status: pd.Series,
+    event_date: pd.Series,
+    settlement_date: pd.Series,
+    as_of,
+) -> pd.Series:
+    """
+    Calculate inventory age in days.
+
+    Existing business behaviour is preserved:
+
+    - If status == "Solde":
+        use settlement_date - event_date
+
+    - If status is missing:
+        return NA
+
+    - Otherwise:
+        use reporting date - event_date
+
+    The explicit boolean masks are required because pandas nullable
+    strings can produce pd.NA from comparisons, which numpy.where()
+    cannot use directly as a boolean condition.
+    """
+
+    status = status.astype("string")
+
+    event = pd.to_datetime(
+        event_date,
+        errors="coerce",
+    )
+
+    settlement = pd.to_datetime(
+        settlement_date,
+        errors="coerce",
+    )
+
+    as_of_date = pd.Timestamp(as_of)
+
+    # Important:
+    # status.eq("Solde") can produce <NA>.
+    # Convert it into a strict True/False numpy mask.
+    is_settled = (
+        status
+        .eq("Solde")
+        .fillna(False)
+        .to_numpy(dtype=bool)
+    )
+
+    is_status_missing = (
+        status
+        .isna()
+        .to_numpy(dtype=bool)
+    )
+
+    settled_age = (
+        settlement - event
+    ).dt.days
+
+    active_age = (
+        as_of_date - event
+    ).dt.days
+
+    result = np.where(
+        is_status_missing,
+        np.nan,
+        np.where(
+            is_settled,
+            settled_age,
+            active_age,
+        ),
+    )
+
+    return pd.Series(
+        result,
+        index=status.index,
+        dtype="Float64",
+    )
