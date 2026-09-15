@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import re
 import sys
 import time
 from pathlib import Path
@@ -11,9 +10,8 @@ import pandas as pd
 import yaml
 
 # -----------------------------------------------------------------------------
-# Make project imports work whether this file is run as:
+# Make project imports work for both:
 #   python scripts/run_local.py
-# or:
 #   python -m scripts.run_local
 # -----------------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,39 +49,18 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 def load_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    with path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+
+    with path.open("r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle)
+
     return data if isinstance(data, dict) else {}
 
 
-def recursive_get(obj: Any, *keys: str) -> Any:
-    """Find the first matching key anywhere inside a nested dict/list."""
-    wanted = {k.lower() for k in keys}
-
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if str(key).lower() in wanted:
-                return value
-        for value in obj.values():
-            found = recursive_get(value, *keys)
-            if found is not None:
-                return found
-
-    if isinstance(obj, list):
-        for value in obj:
-            found = recursive_get(value, *keys)
-            if found is not None:
-                return found
-
-    return None
-
-
 def find_input_workbook() -> Path:
-    """
-    Select the local workbook copy.
+    """Find the single workbook under local_test/input.
 
-    Optional override:
-        $env:LOCAL_INPUT_FILE="C:\\path\\file.xlsx"
+    Optional override in PowerShell:
+        $env:LOCAL_INPUT_FILE="C:\\path\\to\\file.xlsx"
     """
     override = os.getenv("LOCAL_INPUT_FILE")
     if override:
@@ -96,11 +73,11 @@ def find_input_workbook() -> Path:
         raise FileNotFoundError(f"Input directory does not exist: {INPUT_DIR}")
 
     candidates = sorted(
-        p
-        for p in INPUT_DIR.iterdir()
-        if p.is_file()
-        and p.suffix.lower() in {".xlsx", ".xlsm"}
-        and not p.name.startswith("~$")
+        path
+        for path in INPUT_DIR.iterdir()
+        if path.is_file()
+        and path.suffix.lower() in {".xlsx", ".xlsm"}
+        and not path.name.startswith("~$")
     )
 
     if not candidates:
@@ -109,7 +86,7 @@ def find_input_workbook() -> Path:
         )
 
     if len(candidates) > 1:
-        names = "\n".join(f"  - {p.name}" for p in candidates)
+        names = "\n".join(f"  - {path.name}" for path in candidates)
         raise RuntimeError(
             "More than one workbook exists in local_test/input. "
             "Keep only the workbook you want to test, or set LOCAL_INPUT_FILE.\n"
@@ -125,137 +102,164 @@ def as_string_list(value: Any) -> list[str]:
     if isinstance(value, str):
         return [value]
     if isinstance(value, (list, tuple, set)):
-        return [str(x) for x in value]
-    if isinstance(value, dict):
-        return [str(k) for k in value.keys()]
+        return [str(item) for item in value]
     return []
 
 
-def resolve_required_sheets(
-    workbook_cfg: dict[str, Any], available: list[str]
+def get_source_sheet(workbook_cfg: dict[str, Any], available: list[str]) -> str:
+    configured = workbook_cfg.get("source_sheet") or workbook_cfg.get("primary_sheet")
+
+    if isinstance(configured, str):
+        for sheet in available:
+            if sheet.casefold() == configured.casefold():
+                return sheet
+        raise KeyError(
+            f"Configured source_sheet '{configured}' was not found in the workbook."
+        )
+
+    if not available:
+        raise RuntimeError("Workbook has no worksheets.")
+
+    return available[0]
+
+
+def get_required_sheets(
+    workbook_cfg: dict[str, Any],
+    available: list[str],
+    source_sheet: str,
 ) -> list[str]:
-    configured = recursive_get(
-        workbook_cfg,
-        "required_sheets",
-        "input_sheets",
-        "source_sheets",
-        "sheets",
-    )
-    requested = as_string_list(configured)
+    requested = as_string_list(workbook_cfg.get("required_sheets"))
 
-    # If the config does not explicitly define sheets, validate the workbook
-    # itself and load all sheets. This is local testing only.
     if not requested:
-        return available
+        requested = [source_sheet]
 
-    available_lookup = {s.casefold(): s for s in available}
+    available_lookup = {sheet.casefold(): sheet for sheet in available}
     resolved: list[str] = []
+    missing: list[str] = []
 
     for sheet in requested:
-        match = available_lookup.get(sheet.casefold())
-        if match:
-            resolved.append(match)
+        actual = available_lookup.get(sheet.casefold())
+        if actual is None:
+            missing.append(sheet)
+        else:
+            resolved.append(actual)
+
+    if missing:
+        raise KeyError(
+            "Required worksheet(s) missing: " + ", ".join(missing)
+        )
+
+    if source_sheet not in resolved:
+        resolved.insert(0, source_sheet)
 
     return list(dict.fromkeys(resolved))
 
 
-def resolve_primary_sheet(
-    workbook_cfg: dict[str, Any],
-    frames: dict[str, pd.DataFrame],
-) -> str:
-    configured = recursive_get(
-        workbook_cfg,
-        "primary_sheet",
-        "main_sheet",
-        "source_sheet",
-        "data_sheet",
-    )
-
-    if isinstance(configured, str):
-        for name in frames:
-            if name.casefold() == configured.casefold():
-                return name
-
-    if not frames:
-        raise RuntimeError("No worksheets were loaded.")
-
-    # Safe fallback for local testing: use the loaded sheet with most rows.
-    # We print the selection so it is never silent.
-    return max(frames, key=lambda name: len(frames[name]))
-
-
-def extract_column_mapping(
-    cfg: dict[str, Any], sheet_name: str
-) -> dict[str, str]:
-    """Support flat or sheet-specific source->canonical mappings."""
-    if not cfg:
-        return {}
-
-    candidate: Any = cfg
-
-    for key in ("columns", "column_mapping", "mappings"):
-        value = cfg.get(key)
-        if isinstance(value, dict):
-            candidate = value
-            break
-
-    # Sheet-specific mapping
-    if isinstance(candidate, dict):
-        for key, value in candidate.items():
-            if str(key).casefold() == sheet_name.casefold() and isinstance(value, dict):
-                candidate = value
-                break
-
-    if not isinstance(candidate, dict):
-        return {}
-
-    result: dict[str, str] = {}
-    for source, target in candidate.items():
-        if isinstance(source, str) and isinstance(target, str):
-            result[source] = target
-
-    return result
-
-
-def rename_columns_if_configured(
+def validate_required_columns(
     df: pd.DataFrame,
-    mapping_cfg: dict[str, Any],
-    sheet_name: str,
-) -> pd.DataFrame:
-    mapping = extract_column_mapping(mapping_cfg, sheet_name)
-    if not mapping:
-        return df
+    workbook_cfg: dict[str, Any],
+    business_cfg: dict[str, Any],
+) -> None:
+    required = as_string_list(workbook_cfg.get("required_columns"))
 
-    existing = {str(c).casefold(): c for c in df.columns}
-    rename_map: dict[Any, str] = {}
+    columns_cfg = business_cfg.get("columns")
+    if isinstance(columns_cfg, dict):
+        # These are source columns that the calculation code actually reads.
+        for key in (
+            "status_raw",
+            "event_date",
+            "settlement_date",
+            "return_date",
+        ):
+            value = columns_cfg.get(key)
+            if isinstance(value, str):
+                required.append(value)
 
-    for source, target in mapping.items():
-        actual = existing.get(source.casefold())
-        if actual is not None:
-            rename_map[actual] = target
+    required = list(dict.fromkeys(required))
+    missing = [column for column in required if column not in df.columns]
 
-    return df.rename(columns=rename_map) if rename_map else df
+    if missing:
+        raise KeyError(
+            "Required source column(s) missing from the processing sheet: "
+            + ", ".join(missing)
+        )
+
+
+def get_event_date_column(
+    business_cfg: dict[str, Any],
+    df: pd.DataFrame,
+) -> str:
+    """Use the explicit event date configured in business_rules.yaml.
+
+    The workbook contains several valid date columns, so this runner deliberately
+    does not guess which one should drive monthly/YTD reporting.
+    """
+    columns_cfg = business_cfg.get("columns")
+    if not isinstance(columns_cfg, dict):
+        raise KeyError("business_rules.yaml is missing the 'columns' section.")
+
+    event_date = columns_cfg.get("event_date")
+    if not isinstance(event_date, str) or not event_date.strip():
+        raise KeyError(
+            "business_rules.yaml is missing columns.event_date."
+        )
+
+    if event_date not in df.columns:
+        raise KeyError(
+            f"Configured event date column '{event_date}' was not found "
+            "in the processing sheet."
+        )
+
+    return event_date
+
+
+def resolve_period(df: pd.DataFrame, event_date_col: str) -> str:
+    """Return reporting period as YYYY-MM.
+
+    Preferred local override:
+        $env:TEST_PERIOD="2026-07"
+    """
+    override = os.getenv("TEST_PERIOD")
+    if override:
+        try:
+            return str(pd.Period(override, freq="M"))
+        except Exception as exc:
+            raise ValueError(
+                f"Invalid TEST_PERIOD '{override}'. Expected format like 2026-07."
+            ) from exc
+
+    dates = pd.to_datetime(df[event_date_col], errors="coerce").dropna()
+    if dates.empty:
+        raise ValueError(
+            f"Cannot infer reporting period because '{event_date_col}' has no "
+            "valid dates. Set TEST_PERIOD explicitly, for example: "
+            "$env:TEST_PERIOD='2026-07'"
+        )
+
+    inferred = str(dates.max().to_period("M"))
+    print(f"  - TEST_PERIOD not set; inferred reporting period: {inferred}")
+    return inferred
 
 
 def resolve_text_columns(
     workbook_cfg: dict[str, Any],
     df: pd.DataFrame,
 ) -> list[str]:
-    configured = recursive_get(
-        workbook_cfg,
-        "text_columns",
-        "string_columns",
-    )
-    columns = [c for c in as_string_list(configured) if c in df.columns]
-    if columns:
-        return columns
+    configured = as_string_list(workbook_cfg.get("text_columns"))
+    if configured:
+        missing = [column for column in configured if column not in df.columns]
+        if missing:
+            print(
+                "  - Warning: configured text columns not found and skipped: "
+                + ", ".join(missing)
+            )
+        return [column for column in configured if column in df.columns]
 
-    # Local fallback: standardize object/string columns only.
     return [
-        str(col)
-        for col in df.columns
-        if pd.api.types.is_object_dtype(df[col])
-        or pd.api.types.is_string_dtype(df[col])
+        str(column)
+        for column in df.columns
+        if pd.api.types.is_object_dtype(df[column])
+        or pd.api.types.is_string_dtype(df[column])
     ]
 
 
@@ -265,10 +269,7 @@ def apply_configured_lookups(
     workbook_cfg: dict[str, Any],
     business_cfg: dict[str, Any],
 ) -> pd.DataFrame:
-    lookups = recursive_get(business_cfg, "lookups", "reference_lookups")
-    if lookups is None:
-        lookups = recursive_get(workbook_cfg, "lookups", "reference_lookups")
-
+    lookups = business_cfg.get("lookups") or workbook_cfg.get("lookups")
     if not isinstance(lookups, list):
         return df
 
@@ -288,21 +289,27 @@ def apply_configured_lookups(
         value_columns = spec.get("value_columns") or spec.get("columns")
         required = bool(spec.get("required", False))
 
-        if not all([ref_sheet, left_key, right_key, value_columns]):
+        values = as_string_list(value_columns)
+
+        if not ref_sheet or not left_key or not right_key or not values:
             print(f"  - Lookup {index}: skipped (incomplete configuration)")
             continue
 
         matching_sheet = next(
-            (s for s in frames if s.casefold() == str(ref_sheet).casefold()),
+            (
+                name
+                for name in frames
+                if name.casefold() == str(ref_sheet).casefold()
+            ),
             None,
         )
+
         if matching_sheet is None:
             if required:
                 raise KeyError(f"Required lookup sheet not loaded: {ref_sheet}")
             print(f"  - Lookup {index}: reference sheet not loaded: {ref_sheet}")
             continue
 
-        values = as_string_list(value_columns)
         print(
             f"  - Lookup {index}: {left_key} -> "
             f"{matching_sheet}.{right_key} ({', '.join(values)})"
@@ -320,112 +327,59 @@ def apply_configured_lookups(
     return result
 
 
-def resolve_column_name(
-    configs: list[dict[str, Any]],
-    df: pd.DataFrame,
-    config_keys: tuple[str, ...],
-    fallback_patterns: tuple[str, ...],
-    label: str,
-    required: bool = True,
-) -> str | None:
-    for cfg in configs:
-        configured = recursive_get(cfg, *config_keys)
-        if isinstance(configured, str):
-            for column in df.columns:
-                if str(column).casefold() == configured.casefold():
-                    return str(column)
-
-    # Conservative fallback: only accept a unique matching column.
-    matches: list[str] = []
-    for column in df.columns:
-        normalized = re.sub(r"[^a-z0-9]+", " ", str(column).casefold()).strip()
-        if any(pattern in normalized for pattern in fallback_patterns):
-            matches.append(str(column))
-
-    matches = list(dict.fromkeys(matches))
-
-    if len(matches) == 1:
-        print(f"  - Auto-detected {label}: {matches[0]}")
-        return matches[0]
-
-    if required:
-        raise KeyError(
-            f"Could not safely determine {label}. "
-            f"Configure one of {config_keys}. Candidates: {matches or 'none'}"
-        )
-
-    return None
-
-
-def resolve_period(
-    configs: list[dict[str, Any]],
-    df: pd.DataFrame,
-    date_col: str,
-) -> pd.Period:
-    # Explicit environment override is easiest for local regression testing.
-    override = os.getenv("TEST_PERIOD")
-    if override:
-        return pd.Period(override, freq="M")
-
-    for cfg in configs:
-        value = recursive_get(cfg, "period", "reporting_period", "test_period")
-        if value is not None:
-            try:
-                return pd.Period(str(value), freq="M")
-            except Exception:
-                pass
-
-    dates = pd.to_datetime(df[date_col], errors="coerce").dropna()
-    if dates.empty:
-        raise ValueError(
-            f"Cannot infer reporting period because '{date_col}' contains no valid dates. "
-            "Set TEST_PERIOD, e.g. $env:TEST_PERIOD='2026-07'."
-        )
-
-    inferred = dates.max().to_period("M")
-    print(f"  - TEST_PERIOD not set; inferred reporting period: {inferred}")
-    return inferred
-
-
-def resolve_value_columns(
+def get_value_columns(
     report_cfg: dict[str, Any],
     business_cfg: dict[str, Any],
     df: pd.DataFrame,
 ) -> list[str]:
     for cfg in (report_cfg, business_cfg):
-        value = recursive_get(
-            cfg,
-            "value_columns",
-            "metric_columns",
-            "monthly_value_columns",
-        )
-        columns = [c for c in as_string_list(value) if c in df.columns]
-        if columns:
-            return columns
+        for key in ("value_columns", "metric_columns", "monthly_value_columns"):
+            configured = as_string_list(cfg.get(key))
+            found = [column for column in configured if column in df.columns]
+            if found:
+                return found
 
-    # Conservative local fallback: numeric columns only.
-    return [
-        str(c)
-        for c in df.select_dtypes(include="number").columns
-    ]
+    # Local fallback only: aggregate numeric columns if no explicit report metric
+    # list exists yet.
+    return [str(column) for column in df.select_dtypes(include="number").columns]
 
 
-def resolve_french_labels(
+def get_french_labels(
     report_cfg: dict[str, Any],
     mapping_cfg: dict[str, Any],
-    primary_sheet: str,
 ) -> dict[str, str]:
-    labels = recursive_get(report_cfg, "french_labels", "output_labels", "labels")
-    if isinstance(labels, dict):
-        return {
-            str(k): str(v)
-            for k, v in labels.items()
-            if isinstance(k, str) and isinstance(v, str)
-        }
+    for key in ("french_labels", "output_labels", "labels"):
+        labels = report_cfg.get(key)
+        if isinstance(labels, dict):
+            return {
+                str(source): str(target)
+                for source, target in labels.items()
+                if isinstance(source, str) and isinstance(target, str)
+            }
 
-    # If column_mapping is source(French)->canonical, reverse it for output.
-    source_to_canonical = extract_column_mapping(mapping_cfg, primary_sheet)
-    return {canonical: source for source, canonical in source_to_canonical.items()}
+    # If the mapping file contains a canonical->French output mapping, use it.
+    for key in ("french_labels", "output_labels"):
+        labels = mapping_cfg.get(key)
+        if isinstance(labels, dict):
+            return {
+                str(source): str(target)
+                for source, target in labels.items()
+                if isinstance(source, str) and isinstance(target, str)
+            }
+
+    return {}
+
+
+def get_output_sheet_names(workbook_cfg: dict[str, Any]) -> tuple[str, str, str]:
+    output_cfg = workbook_cfg.get("output")
+    if not isinstance(output_cfg, dict):
+        output_cfg = {}
+
+    detail = str(output_cfg.get("detail_sheet") or "Processed_Data")
+    monthly = str(output_cfg.get("remarketing_sheet") or "Monthly_Report")
+    ytd = str(output_cfg.get("era_sheet") or "YTD_Data")
+
+    return detail[:31], monthly[:31], ytd[:31]
 
 
 def print_frame_summary(name: str, df: pd.DataFrame) -> None:
@@ -462,16 +416,15 @@ def main() -> None:
     available_sheets = sheet_names(input_file)
 
     print(f"Found {len(available_sheets)} worksheet(s):")
-    for idx, name in enumerate(available_sheets, start=1):
-        print(f"  {idx:>2}. {name}")
+    for index, name in enumerate(available_sheets, start=1):
+        print(f"  {index:>2}. {name}")
 
-    required_sheets = resolve_required_sheets(workbook_cfg, available_sheets)
-
-    if not required_sheets:
-        raise RuntimeError(
-            "None of the configured sheets exist in the workbook. "
-            "Check config/workbook_config.yaml."
-        )
+    source_sheet = get_source_sheet(workbook_cfg, available_sheets)
+    required_sheets = get_required_sheets(
+        workbook_cfg,
+        available_sheets,
+        source_sheet,
+    )
 
     print("\nSheets selected for local processing:")
     for name in required_sheets:
@@ -482,10 +435,9 @@ def main() -> None:
     # ------------------------------------------------------------------
     print("\n[2/10] Validating workbook...")
 
-    max_bytes = recursive_get(workbook_cfg, "max_bytes", "max_file_bytes")
+    max_bytes = workbook_cfg.get("max_bytes", 1024 * 1024 * 1024)
     if not isinstance(max_bytes, int):
-        # Local testing default: 1 GiB. This is only a validation ceiling.
-        max_bytes = 1024 * 1024 * 1024
+        max_bytes = int(max_bytes)
 
     validation = validate_workbook(
         input_file,
@@ -498,39 +450,35 @@ def main() -> None:
         print(f"Validation result: {validation}")
 
     # ------------------------------------------------------------------
-    # 3. Load configured sheets
+    # 3. Read configured worksheets
     # ------------------------------------------------------------------
     print("\n[3/10] Reading configured worksheets...")
     frames = read_configured(input_file, required_sheets)
 
-    for name, df in frames.items():
-        print_frame_summary(name, df)
+    for name, frame in frames.items():
+        print_frame_summary(name, frame)
 
-    primary_sheet = resolve_primary_sheet(workbook_cfg, frames)
-    print(f"\nPrimary processing sheet: {primary_sheet}")
+    if source_sheet not in frames:
+        raise KeyError(f"Source worksheet was not loaded: {source_sheet}")
+
+    working = frames[source_sheet].copy()
+    print(f"\nPrimary processing sheet: {source_sheet}")
+
+    validate_required_columns(working, workbook_cfg, business_cfg)
 
     # ------------------------------------------------------------------
-    # 4. Rename configured source columns + standardize text values
+    # 4. Standardize configured text columns
     # ------------------------------------------------------------------
     print("\n[4/10] Standardizing data...")
 
-    standardized_frames: dict[str, pd.DataFrame] = {}
+    text_columns = resolve_text_columns(workbook_cfg, working)
+    if text_columns:
+        working = standardize(working, text_columns)
 
-    for name, source_df in frames.items():
-        df = source_df.copy()
-        df = rename_columns_if_configured(df, mapping_cfg, name)
-        text_columns = resolve_text_columns(workbook_cfg, df)
-
-        if text_columns:
-            df = standardize(df, text_columns)
-
-        standardized_frames[name] = df
-        print(
-            f"  - {name}: standardized "
-            f"{len(text_columns)} text column(s)"
-        )
-
-    working = standardized_frames[primary_sheet].copy()
+    print(
+        f"  - {source_sheet}: standardized "
+        f"{len(text_columns)} text column(s)"
+    )
 
     # ------------------------------------------------------------------
     # 5. Reference lookups / mappings
@@ -538,7 +486,7 @@ def main() -> None:
     print("\n[5/10] Applying configured reference lookups...")
     working = apply_configured_lookups(
         working,
-        standardized_frames,
+        frames,
         workbook_cfg,
         business_cfg,
     )
@@ -549,57 +497,18 @@ def main() -> None:
     # ------------------------------------------------------------------
     print("\n[6/10] Applying business calculation rules...")
 
-    configs = [business_cfg, workbook_cfg, report_cfg]
+    event_date_col = get_event_date_column(business_cfg, working)
+    period = resolve_period(working, event_date_col)
 
-    date_col = resolve_column_name(
-        configs,
-        working,
-        ("date_col", "date_column", "report_date_column", "transaction_date_column"),
-        ("date",),
-        "date column",
-    )
+    print(f"  - Reporting/event date column: {event_date_col}")
+    print(f"  - Processing period          : {period}")
 
-    month_col = resolve_column_name(
-        configs,
-        working,
-        ("month_col", "month_column"),
-        ("month", "mois"),
-        "month column",
-        required=False,
-    )
-
-    year_col = resolve_column_name(
-        configs,
-        working,
-        ("year_col", "year_column"),
-        ("year", "annee", "année"),
-        "year column",
-        required=False,
-    )
-
-    # apply_rules requires names for month/year. If they do not already exist,
-    # create local canonical columns from the configured date column.
-    parsed_dates = pd.to_datetime(working[date_col], errors="coerce")
-
-    if month_col is None:
-        month_col = "__report_month"
-        working[month_col] = parsed_dates.dt.month
-        print(f"  - Created local month column: {month_col}")
-
-    if year_col is None:
-        year_col = "__report_year"
-        working[year_col] = parsed_dates.dt.year
-        print(f"  - Created local year column: {year_col}")
-
-    period = resolve_period(configs, working, date_col)
-    print(f"  - Processing period: {period}")
-
+    # Actual generated project API:
+    #     apply_rules(df, cfg, period)
     calculated = apply_rules(
         working,
         business_cfg,
-        date_col,
-        month_col,
-        year_col,
+        period,
     )
 
     if calculated is None:
@@ -612,15 +521,18 @@ def main() -> None:
     # ------------------------------------------------------------------
     print("\n[7/10] Calculating monthly metrics...")
 
-    value_columns = resolve_value_columns(report_cfg, business_cfg, calculated)
+    value_columns = get_value_columns(report_cfg, business_cfg, calculated)
     print(f"  - Metric/value columns: {value_columns}")
 
     monthly = monthly_metrics(
         calculated,
-        date_col,
+        event_date_col,
         value_columns,
         period,
     )
+
+    if monthly is None:
+        raise RuntimeError("monthly_metrics() returned None; expected a DataFrame.")
 
     print_frame_summary("Monthly report", monthly)
 
@@ -631,9 +543,12 @@ def main() -> None:
 
     ytd = ytd_slice(
         calculated,
-        date_col,
+        event_date_col,
         period,
     )
+
+    if ytd is None:
+        raise RuntimeError("ytd_slice() returned None; expected a DataFrame.")
 
     print_frame_summary("YTD dataset", ytd)
 
@@ -642,12 +557,11 @@ def main() -> None:
     # ------------------------------------------------------------------
     print("\n[9/10] Running reconciliation...")
 
-    source_df = frames[primary_sheet]
-    source_count = len(source_df)
+    source_count = len(frames[source_sheet])
     valid_count = len(calculated)
     excluded_count = max(source_count - valid_count, 0)
 
-    reconciliation = reconcile(
+    reconciliation_result = reconcile(
         source_count,
         valid_count,
         excluded_count,
@@ -656,23 +570,20 @@ def main() -> None:
     )
 
     print("Reconciliation result:")
-    print(reconciliation)
+    print(reconciliation_result)
 
     # ------------------------------------------------------------------
-    # 10. Build local report workbook
+    # 10. Build output workbook
     # ------------------------------------------------------------------
     print("\n[10/10] Building output workbook...")
 
-    french_labels = resolve_french_labels(
-        report_cfg,
-        mapping_cfg,
-        primary_sheet,
-    )
+    french_labels = get_french_labels(report_cfg, mapping_cfg)
+    detail_sheet, monthly_sheet, ytd_sheet = get_output_sheet_names(workbook_cfg)
 
     output_sheets: dict[str, pd.DataFrame] = {
-        "Processed_Data": calculated,
-        "Monthly_Report": monthly,
-        "YTD_Data": ytd,
+        detail_sheet: calculated,
+        monthly_sheet: monthly,
+        ytd_sheet: ytd,
     }
 
     build_report(
@@ -683,7 +594,8 @@ def main() -> None:
 
     if not output_file.exists():
         raise RuntimeError(
-            f"build_report() completed but output file was not created: {output_file}"
+            "build_report() completed but the expected output file was not created: "
+            f"{output_file}"
         )
 
     elapsed = time.perf_counter() - started
