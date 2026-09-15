@@ -1,1 +1,13 @@
 python -c "import inspect; import include.remarketing.excel_reader as a, include.remarketing.workbook_validation as b, include.remarketing.standardization as c, include.remarketing.mappings as d, include.remarketing.calculations as e, include.remarketing.monthly_reporting as f, include.remarketing.ytd_reporting as g, include.remarketing.report_builder as h, include.remarketing.reconciliation as i; mods=[a,b,c,d,e,f,g,h,i]; [print('\n=== '+m.__name__+' ===') or [print(n, inspect.signature(o)) for n,o in vars(m).items() if inspect.isfunction(o) and getattr(o,'__module__','')==m.__name__] for m in mods]"
+
+
+python -c "import pandas as pd; p=r'local_test\input\REMARKETING_ET_REPOSSESSION_copy24072026.xlsx'; df=pd.read_excel(p,sheet_name='Remarketing',nrows=5); print('\n'.join([repr(c) for c in df.columns if 'date' in str(c).lower()]))"
+
+
+Get-Content .\config\business_rules.yaml
+
+
+Get-Content .\config\workbook_config.yaml
+
+
+Select-String -Path .\include\remarketing\calculations.py -Pattern "def apply_rules" -Context 0,80
