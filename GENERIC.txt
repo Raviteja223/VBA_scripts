@@ -26,3 +26,25 @@ columns:
   return_date: "Date de retour"
   return_month: "Mois de retour"
   return_year: "Année de Retour"
+
+vat_rate: 0.2
+
+aging_buckets:
+  - 30
+  - 60
+  - 90
+  - 120
+  - 150
+  - 180
+  - 360
+
+collection_fee:
+  rate: 0.08
+  cap: 1200
+
+mileage_charge_rate: 0.005
+
+as_of_strategy: reporting_period_end
+
+
+python -c "import yaml; print(yaml.safe_load(open(r'config\business_rules.yaml', encoding='utf-8')))"
