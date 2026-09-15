@@ -48,3 +48,9 @@ as_of_strategy: reporting_period_end
 
 
 python -c "import yaml; print(yaml.safe_load(open(r'config\business_rules.yaml', encoding='utf-8')))"
+
+
+python -c "from pathlib import Path; import pandas as pd, yaml; p=next(Path('local_test/input').glob('*.xlsx')); df=pd.read_excel(p,sheet_name='Remarketing',nrows=5); cfg=yaml.safe_load(open('config/business_rules.yaml',encoding='utf-8')); expected=cfg['columns']['status_raw']; print('CONFIG STATUS:',repr(expected)); print('EXACT MATCH:',expected in df.columns); print('STATUS-LIKE COLUMNS:'); [print(repr(c)) for c in df.columns if any(x in str(c).casefold() for x in ['statut','status','etat','état'])]"
+
+
+python -c "from pathlib import Path; import pandas as pd; p=next(Path('local_test/input').glob('*.xlsx')); df=pd.read_excel(p,sheet_name='Remarketing',nrows=2); [print(i,repr(c)) for i,c in enumerate(df.columns)]"
