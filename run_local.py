@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 import os
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +50,128 @@ BUSINESS_DERIVED_COLUMN_KEYS = (
 
 
 # -----------------------------------------------------------------------------
+# NORMALIZATION / RESOLUTION
+# -----------------------------------------------------------------------------
+
+
+def normalize_name(value: Any) -> str:
+    """Return a display-safe normalized name without changing business meaning."""
+    if value is None:
+        return ""
+
+    text = unicodedata.normalize("NFKC", str(value))
+    text = (
+        text.replace("\xa0", " ")
+        .replace("\u2007", " ")
+        .replace("\u202f", " ")
+        .replace("\u200b", "")
+        .replace("\u200c", "")
+        .replace("\u200d", "")
+        .replace("\ufeff", "")
+    )
+    return " ".join(text.split()).strip()
+
+
+def normalize_key(value: Any) -> str:
+    """Return a comparison-only normalized key."""
+    return normalize_name(value).casefold()
+
+
+def build_name_lookup(values: list[Any]) -> dict[str, str]:
+    """Map normalized name -> actual name, while rejecting ambiguity."""
+    lookup: dict[str, str] = {}
+
+    for value in values:
+        actual = str(value)
+        key = normalize_key(actual)
+
+        if key in lookup and lookup[key] != actual:
+            raise ValueError(
+                "Ambiguous names after normalization: "
+                f"{lookup[key]!r} and {actual!r}"
+            )
+
+        lookup[key] = actual
+
+    return lookup
+
+
+def build_column_lookup(df: pd.DataFrame) -> dict[str, str]:
+    return build_name_lookup([str(column) for column in df.columns])
+
+
+def resolve_actual_column(
+    df: pd.DataFrame,
+    configured_name: str,
+    *,
+    label: str = "column",
+) -> str:
+    lookup = build_column_lookup(df)
+    actual = lookup.get(normalize_key(configured_name))
+
+    if actual is None:
+        raise KeyError(
+            f"Configured {label} {configured_name!r} does not exist in "
+            "the processing dataframe."
+        )
+
+    return actual
+
+
+def resolve_optional_column(
+    df: pd.DataFrame,
+    configured_name: str | None,
+    *,
+    label: str = "column",
+) -> str | None:
+    if not configured_name:
+        return None
+    return resolve_actual_column(df, configured_name, label=label)
+
+
+def resolve_column_list(
+    df: pd.DataFrame,
+    configured_columns: list[str] | str | None,
+    *,
+    label: str,
+) -> list[str]:
+    if not configured_columns:
+        return []
+
+    if isinstance(configured_columns, str):
+        configured_columns = [configured_columns]
+
+    resolved: list[str] = []
+    seen: set[str] = set()
+
+    for configured in configured_columns:
+        actual = resolve_actual_column(df, str(configured), label=label)
+        key = normalize_key(actual)
+        if key not in seen:
+            seen.add(key)
+            resolved.append(actual)
+
+    return resolved
+
+
+def resolve_sheet_name(
+    input_file: Path,
+    configured_name: str,
+) -> str:
+    available = sheet_names(input_file)
+    lookup = build_name_lookup(available)
+    actual = lookup.get(normalize_key(configured_name))
+
+    if actual is None:
+        raise KeyError(
+            f"Configured worksheet {configured_name!r} was not found. "
+            f"Available sheets: {available}"
+        )
+
+    return actual
+
+
+# -----------------------------------------------------------------------------
 # CONFIG
 # -----------------------------------------------------------------------------
 
@@ -79,12 +203,10 @@ def resolve_input_file() -> Path:
 
     if explicit:
         path = Path(explicit).expanduser().resolve()
-
         if not path.exists():
             raise FileNotFoundError(
                 f"LOCAL_INPUT_FILE does not exist:\n{path}"
             )
-
         return path
 
     candidates = [
@@ -111,57 +233,59 @@ def resolve_input_file() -> Path:
 
 
 # -----------------------------------------------------------------------------
-# COLUMN VALIDATION
+# SOURCE / DERIVED COLUMN VALIDATION
 # -----------------------------------------------------------------------------
+
+
+def configured_source_columns(
+    workbook_cfg: dict[str, Any],
+    business_cfg: dict[str, Any],
+) -> list[str]:
+    required: list[str] = []
+
+    for key in ("required_columns", "business_keys", "text_columns"):
+        values = workbook_cfg.get(key, []) or []
+        if isinstance(values, str):
+            values = [values]
+        required.extend(str(value) for value in values if value)
+
+    columns_cfg = business_cfg.get("columns", {}) or {}
+    for logical_key in BUSINESS_SOURCE_COLUMN_KEYS:
+        value = columns_cfg.get(logical_key)
+        if value:
+            required.append(str(value))
+
+    unique: list[str] = []
+    seen: set[str] = set()
+
+    for configured in required:
+        key = normalize_key(configured)
+        if key not in seen:
+            seen.add(key)
+            unique.append(configured)
+
+    return unique
 
 
 def validate_required_source_columns(
     df: pd.DataFrame,
     workbook_cfg: dict[str, Any],
     business_cfg: dict[str, Any],
-) -> None:
-    """
-    Validate only columns that must already exist in the source workbook.
+) -> dict[str, str]:
+    """Validate source-only columns and return config-name -> actual-name."""
+    lookup = build_column_lookup(df)
+    resolved: dict[str, str] = {}
+    missing: list[str] = []
 
-    Derived fields such as 'Statut calculé' and age buckets are intentionally
-    excluded because calculations.apply_rules() is expected to create them.
-    """
-
-    required: set[str] = set()
-
-    for key in (
-        "required_columns",
-        "business_keys",
-        "text_columns",
-    ):
-        values = workbook_cfg.get(key, []) or []
-
-        if isinstance(values, str):
-            values = [values]
-
-        for column in values:
-            if column:
-                required.add(str(column))
-
-    columns_cfg = business_cfg.get("columns", {}) or {}
-
-    for logical_key in BUSINESS_SOURCE_COLUMN_KEYS:
-        column = columns_cfg.get(logical_key)
-        if column:
-            required.add(str(column))
-
-    missing = sorted(
-        column
-        for column in required
-        if column not in df.columns
-    )
+    for configured in configured_source_columns(workbook_cfg, business_cfg):
+        actual = lookup.get(normalize_key(configured))
+        if actual is None:
+            missing.append(configured)
+        else:
+            resolved[configured] = actual
 
     if missing:
-        available = "\n".join(
-            f"  - {column!r}"
-            for column in df.columns
-        )
-
+        available = "\n".join(f"  - {str(column)!r}" for column in df.columns)
         raise KeyError(
             "Required SOURCE column(s) missing from the processing sheet: "
             + ", ".join(missing)
@@ -170,32 +294,38 @@ def validate_required_source_columns(
         )
 
     print("Required source-column validation passed.")
-    print("Validated source columns:")
+    print("Resolved source columns:")
+    for configured, actual in resolved.items():
+        if configured == actual:
+            print(f"  - {configured!r}")
+        else:
+            print(f"  - {configured!r} -> {actual!r}")
 
-    for column in sorted(required):
-        print(f"  - {column}")
-
+    return resolved
 
 
 def validate_derived_columns(
     df: pd.DataFrame,
     business_cfg: dict[str, Any],
-) -> None:
+) -> dict[str, str]:
     """Validate fields that apply_rules() is expected to generate."""
-
     columns_cfg = business_cfg.get("columns", {}) or {}
-
     expected = [
         str(columns_cfg[key])
         for key in BUSINESS_DERIVED_COLUMN_KEYS
         if columns_cfg.get(key)
     ]
 
-    missing = [
-        column
-        for column in expected
-        if column not in df.columns
-    ]
+    lookup = build_column_lookup(df)
+    resolved: dict[str, str] = {}
+    missing: list[str] = []
+
+    for configured in expected:
+        actual = lookup.get(normalize_key(configured))
+        if actual is None:
+            missing.append(configured)
+        else:
+            resolved[configured] = actual
 
     if missing:
         raise KeyError(
@@ -205,9 +335,38 @@ def validate_derived_columns(
 
     print("Derived-column validation passed.")
     print("Generated columns:")
+    for configured, actual in resolved.items():
+        if configured == actual:
+            print(f"  - {configured!r}")
+        else:
+            print(f"  - {configured!r} -> {actual!r}")
 
-    for column in expected:
-        print(f"  - {column}")
+    return resolved
+
+
+def resolve_runtime_business_config(
+    df: pd.DataFrame,
+    business_cfg: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Replace configured SOURCE-column names with actual dataframe column names.
+
+    Derived output names are intentionally kept exactly as configured because
+    calculations.apply_rules() is expected to create them.
+    """
+    runtime_cfg = copy.deepcopy(business_cfg)
+    columns_cfg = runtime_cfg.setdefault("columns", {})
+
+    for logical_key in BUSINESS_SOURCE_COLUMN_KEYS:
+        configured = columns_cfg.get(logical_key)
+        if configured:
+            columns_cfg[logical_key] = resolve_actual_column(
+                df,
+                str(configured),
+                label=f"business_rules.columns.{logical_key}",
+            )
+
+    return runtime_cfg
 
 
 # -----------------------------------------------------------------------------
@@ -219,12 +378,7 @@ def resolve_period(
     df: pd.DataFrame,
     business_cfg: dict[str, Any],
 ) -> str:
-    """
-    Resolve YYYY-MM for local execution.
-
-    TEST_PERIOD is preferred. If absent, infer from the configured event_date.
-    """
-
+    """Resolve YYYY-MM for local execution."""
     explicit = os.getenv("TEST_PERIOD")
 
     if explicit:
@@ -234,7 +388,6 @@ def resolve_period(
             raise ValueError(
                 "TEST_PERIOD must be in YYYY-MM format, e.g. 2026-07"
             ) from exc
-
         return str(period)
 
     columns_cfg = business_cfg.get("columns", {}) or {}
@@ -246,10 +399,11 @@ def resolve_period(
             "Set TEST_PERIOD or configure columns.event_date."
         )
 
-    if event_date not in df.columns:
-        raise KeyError(
-            f"Configured event_date column {event_date!r} was not found."
-        )
+    event_date = resolve_actual_column(
+        df,
+        str(event_date),
+        label="event_date column",
+    )
 
     dates = pd.to_datetime(
         df[event_date],
@@ -288,12 +442,7 @@ def apply_reference_lookups(
     input_file: Path,
     mapping_cfg: dict[str, Any],
 ) -> pd.DataFrame:
-    """
-    Apply explicitly configured workbook lookups only.
-
-    If column_mapping.yaml contains no supported lookup list, this is a no-op.
-    """
-
+    """Apply explicitly configured workbook lookups with normalized resolution."""
     result = df
     definitions = _lookup_definitions(mapping_cfg)
 
@@ -301,17 +450,14 @@ def apply_reference_lookups(
         print("No configured reference lookups found; skipping lookup stage.")
         return result
 
-    available_sheets = set(sheet_names(input_file))
+    available_sheets = sheet_names(input_file)
+    sheet_lookup = build_name_lookup(available_sheets)
 
     for index, definition in enumerate(definitions, start=1):
-        sheet = definition.get("sheet") or definition.get("reference_sheet")
-        left_key = definition.get("left_key")
-        right_key = definition.get("right_key")
-        value_columns = (
-            definition.get("value_columns")
-            or definition.get("columns")
-            or []
-        )
+        configured_sheet = definition.get("sheet") or definition.get("reference_sheet")
+        configured_left_key = definition.get("left_key")
+        configured_right_key = definition.get("right_key")
+        value_columns = definition.get("value_columns") or definition.get("columns") or []
         required = bool(definition.get("required", False))
 
         if isinstance(value_columns, str):
@@ -320,9 +466,9 @@ def apply_reference_lookups(
         missing_config = [
             name
             for name, value in {
-                "sheet": sheet,
-                "left_key": left_key,
-                "right_key": right_key,
+                "sheet": configured_sheet,
+                "left_key": configured_left_key,
+                "right_key": configured_right_key,
             }.items()
             if not value
         ]
@@ -333,44 +479,42 @@ def apply_reference_lookups(
                 + ", ".join(missing_config)
             )
 
-        if sheet not in available_sheets:
+        actual_sheet = sheet_lookup.get(normalize_key(configured_sheet))
+        if actual_sheet is None:
             raise KeyError(
-                f"Lookup #{index} reference sheet {sheet!r} does not exist."
+                f"Lookup #{index} reference sheet {configured_sheet!r} does not exist."
             )
 
-        if left_key not in result.columns:
-            raise KeyError(
-                f"Lookup #{index} source key {left_key!r} does not exist "
-                "in the processing dataframe."
-            )
+        actual_left_key = resolve_actual_column(
+            result,
+            str(configured_left_key),
+            label=f"lookup #{index} left_key",
+        )
 
-        reference = read_sheet(input_file, sheet)
-
-        required_reference_columns = [right_key, *value_columns]
-        missing_reference_columns = [
-            column
-            for column in required_reference_columns
-            if column not in reference.columns
-        ]
-
-        if missing_reference_columns:
-            raise KeyError(
-                f"Lookup #{index} reference sheet {sheet!r} is missing: "
-                + ", ".join(missing_reference_columns)
-            )
+        reference = read_sheet(input_file, actual_sheet)
+        actual_right_key = resolve_actual_column(
+            reference,
+            str(configured_right_key),
+            label=f"lookup #{index} right_key",
+        )
+        actual_value_columns = resolve_column_list(
+            reference,
+            [str(column) for column in value_columns],
+            label=f"lookup #{index} value column",
+        )
 
         result = left_lookup(
             result,
             reference,
-            left_key=left_key,
-            right_key=right_key,
-            value_columns=value_columns,
+            left_key=actual_left_key,
+            right_key=actual_right_key,
+            value_columns=actual_value_columns,
             required=required,
         )
 
         print(
-            f"Applied lookup #{index}: {sheet!r} "
-            f"({left_key!r} -> {right_key!r})"
+            f"Applied lookup #{index}: {actual_sheet!r} "
+            f"({actual_left_key!r} -> {actual_right_key!r})"
         )
 
     return result
@@ -426,35 +570,21 @@ def resolve_value_columns(
         ),
     )
 
-    if configured:
-        missing = [c for c in configured if c not in df.columns]
+    if not configured:
+        return []
 
-        if missing:
-            raise KeyError(
-                "Configured reporting value column(s) missing: "
-                + ", ".join(missing)
-            )
-
-        return configured
-
-    # Do not invent business metrics. An empty list lets the project's
-    # monthly_reporting implementation decide whether count-only reporting
-    # is supported. If it is not, it will fail clearly at the reporting stage.
-    return []
+    return resolve_column_list(
+        df,
+        configured,
+        label="reporting value column",
+    )
 
 
 def resolve_french_labels(report_cfg: dict[str, Any]) -> dict[str, str]:
-    for key in (
-        "french_labels",
-        "labels",
-        "column_labels",
-    ):
+    for key in ("french_labels", "labels", "column_labels"):
         value = report_cfg.get(key)
         if isinstance(value, dict):
-            return {
-                str(k): str(v)
-                for k, v in value.items()
-            }
+            return {str(k): str(v) for k, v in value.items()}
     return {}
 
 
@@ -488,7 +618,15 @@ def main() -> None:
 
     print("\n[1/10] Validating workbook...")
 
-    required_sheets = workbook_cfg.get("required_sheets", []) or []
+    configured_required_sheets = workbook_cfg.get("required_sheets", []) or []
+    if isinstance(configured_required_sheets, str):
+        configured_required_sheets = [configured_required_sheets]
+
+    required_sheets = [
+        resolve_sheet_name(input_file, str(sheet))
+        for sheet in configured_required_sheets
+    ]
+
     max_bytes = int(workbook_cfg.get("max_bytes", 250_000_000))
 
     validation = validate_workbook(
@@ -506,7 +644,9 @@ def main() -> None:
 
     print("\n[2/10] Reading configured worksheets...")
 
-    source_sheet = workbook_cfg.get("source_sheet", "Remarketing")
+    configured_source_sheet = workbook_cfg.get("source_sheet", "Remarketing")
+    source_sheet = resolve_sheet_name(input_file, str(configured_source_sheet))
+
     data = read_configured(input_file, [source_sheet])
     working = data[source_sheet].copy()
     source = working.copy()
@@ -529,15 +669,23 @@ def main() -> None:
         business_cfg,
     )
 
+    # Resolve config source names to the real dataframe names once.
+    runtime_business_cfg = resolve_runtime_business_config(
+        working,
+        business_cfg,
+    )
+
     # ------------------------------------------------------------------
     # 4/10 - standardize
     # ------------------------------------------------------------------
 
     print("\n[4/10] Standardizing data...")
 
-    text_columns = workbook_cfg.get("text_columns", []) or []
-    if isinstance(text_columns, str):
-        text_columns = [text_columns]
+    text_columns = resolve_column_list(
+        working,
+        workbook_cfg.get("text_columns", []) or [],
+        label="text column",
+    )
 
     working = standardize(
         working,
@@ -562,11 +710,18 @@ def main() -> None:
 
     print("Reference lookup stage completed.")
 
+    # Re-resolve runtime source names after lookup/standardization in case
+    # dataframe columns were preserved or augmented.
+    runtime_business_cfg = resolve_runtime_business_config(
+        working,
+        business_cfg,
+    )
+
     # ------------------------------------------------------------------
-    # Resolve period once source data is available
+    # Resolve period
     # ------------------------------------------------------------------
 
-    period = resolve_period(working, business_cfg)
+    period = resolve_period(working, runtime_business_cfg)
     print(f"\nReporting period: {period}")
 
     # ------------------------------------------------------------------
@@ -577,13 +732,13 @@ def main() -> None:
 
     working = apply_rules(
         working,
-        business_cfg,
+        runtime_business_cfg,
         period,
     )
 
     validate_derived_columns(
         working,
-        business_cfg,
+        runtime_business_cfg,
     )
 
     print("Business calculation rules completed.")
@@ -594,13 +749,19 @@ def main() -> None:
 
     print("\n[7/10] Building monthly metrics...")
 
-    columns_cfg = business_cfg.get("columns", {}) or {}
+    columns_cfg = runtime_business_cfg.get("columns", {}) or {}
     event_date = columns_cfg.get("event_date")
 
     if not event_date:
         raise KeyError(
             "business_rules.yaml must configure columns.event_date."
         )
+
+    event_date = resolve_actual_column(
+        working,
+        str(event_date),
+        label="monthly event_date",
+    )
 
     value_columns = resolve_value_columns(
         working,
@@ -663,25 +824,17 @@ def main() -> None:
 
     output_cfg = workbook_cfg.get("output", {}) or {}
 
-    detail_sheet = output_cfg.get(
-        "detail_sheet",
-        "Remarketing",
-    )
-
+    detail_sheet = output_cfg.get("detail_sheet", "Remarketing")
     remarketing_sheet = output_cfg.get(
         "remarketing_sheet",
         "Rapport Remarketing",
     )
-
-    era_sheet = output_cfg.get(
-        "era_sheet",
-        "Rapport ERA",
-    )
+    era_sheet = output_cfg.get("era_sheet", "Rapport ERA")
 
     report_sheets = {
-        detail_sheet: working,
-        remarketing_sheet: monthly,
-        era_sheet: ytd,
+        str(detail_sheet): working,
+        str(remarketing_sheet): monthly,
+        str(era_sheet): ytd,
     }
 
     french_labels = resolve_french_labels(report_cfg)
@@ -703,9 +856,10 @@ def main() -> None:
     print("LOCAL PIPELINE EXECUTION COMPLETED")
     print("=" * 80)
     print(
-        "\nImportant: execution success only proves the technical flow. "
-        "The generated numbers still need reconciliation against the "
-        "analyst's manual Excel report before the business logic is accepted."
+        "\nImportant: technical execution success does not prove the "
+        "business calculations are correct. Reconcile the generated "
+        "report against the analyst's manual Excel output before accepting "
+        "the business logic."
     )
 
 
