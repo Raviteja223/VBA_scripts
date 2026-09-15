@@ -11,3 +11,6 @@ Get-Content .\config\workbook_config.yaml
 
 
 Select-String -Path .\include\remarketing\calculations.py -Pattern "def apply_rules" -Context 0,80
+
+
+python -c "from pathlib import Path; import yaml; from include.remarketing.excel_reader import read_configured; p=next(Path('local_test/input').glob('*.xlsx')); cfg=yaml.safe_load(open('config/business_rules.yaml',encoding='utf-8')); expected=cfg['columns']['event_date']; df=read_configured(p,['Remarketing'])['Remarketing']; print('CONFIG VALUE:',repr(expected)); print('EXACT MATCH:',expected in df.columns); print('CONFIG CODEPOINTS:',[hex(ord(x)) for x in expected]); print('CANDIDATES:'); [(print(repr(str(c))),print([hex(ord(x)) for x in str(c)])) for c in df.columns if 'retour' in str(c).casefold()]"
