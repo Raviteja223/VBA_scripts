@@ -14,3 +14,15 @@ Select-String -Path .\include\remarketing\calculations.py -Pattern "def apply_ru
 
 
 python -c "from pathlib import Path; import yaml; from include.remarketing.excel_reader import read_configured; p=next(Path('local_test/input').glob('*.xlsx')); cfg=yaml.safe_load(open('config/business_rules.yaml',encoding='utf-8')); expected=cfg['columns']['event_date']; df=read_configured(p,['Remarketing'])['Remarketing']; print('CONFIG VALUE:',repr(expected)); print('EXACT MATCH:',expected in df.columns); print('CONFIG CODEPOINTS:',[hex(ord(x)) for x in expected]); print('CANDIDATES:'); [(print(repr(str(c))),print([hex(ord(x)) for x in str(c)])) for c in df.columns if 'retour' in str(c).casefold()]"
+
+
+columns:
+  status_raw: "Statut"
+  status: "Statut calculé"
+  event_date: "Date de retour"
+  settlement_date: "date vente"
+  age_days: "Âge inventaire (jours)"
+  age_bucket: "Tranche Âge"
+  return_date: "Date de retour"
+  return_month: "Mois de retour"
+  return_year: "Année de Retour"
