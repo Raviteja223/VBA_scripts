@@ -54,3 +54,6 @@ python -c "from pathlib import Path; import pandas as pd, yaml; p=next(Path('loc
 
 
 python -c "from pathlib import Path; import pandas as pd; p=next(Path('local_test/input').glob('*.xlsx')); df=pd.read_excel(p,sheet_name='Remarketing',nrows=2); [print(i,repr(c)) for i,c in enumerate(df.columns)]"
+
+
+python -c "from pathlib import Path; import pandas as pd,yaml,unicodedata; p=next(Path('local_test/input').glob('*.xlsx')); df=pd.read_excel(p,sheet_name='Remarketing',nrows=2); cfg=yaml.safe_load(open('config/workbook_config.yaml',encoding='utf-8')); expected=(cfg.get('required_columns',[])+cfg.get('business_keys',[])+cfg.get('text_columns',[])); print('CONFIG VS WORKBOOK'); [print('\nCONFIG=',repr(e),[f'U+{ord(x):04X}' for x in str(e)],'\nMATCHES=',[(repr(c),[f'U+{ord(x):04X}' for x in str(c)]) for c in df.columns if unicodedata.normalize('NFKC',str(c)).replace('\xa0',' ').replace('\u200b','').strip().casefold()==unicodedata.normalize('NFKC',str(e)).replace('\xa0',' ').replace('\u200b','').strip().casefold()]) for e in expected]"
