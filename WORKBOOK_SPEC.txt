@@ -1,0 +1,913 @@
+You are acting as a Senior Data Engineer, Excel reverse-engineering specialist, and Business Logic Analyst.
+
+I am working on an automation project for a large Excel-based vehicle Remarketing / Repossession reporting process.
+
+IMPORTANT SECURITY / DATA-HANDLING RULES
+========================================
+
+The attached files are client/company-confidential and must remain inside this approved environment.
+
+DO NOT:
+- reproduce customer-level records
+- reproduce VINs
+- reproduce contract numbers
+- reproduce customer names
+- reproduce dealer/customer-specific transactional values
+- reproduce sensitive business records
+- include unnecessary sample rows from the source data
+- invent business rules
+- assume formulas that are not supported by the attached files
+
+You MAY analyze and document:
+- worksheet names
+- column/header names
+- formula structures
+- normalized formula patterns
+- R1C1 formulas
+- named ranges
+- PivotTable definitions
+- sheet relationships
+- column dependencies
+- lookup relationships
+- business calculation structures
+- monthly/YTD calculation structures
+- reporting logic
+- data-quality requirements
+- implementation requirements
+
+If a business rule cannot be proven from the attached files, explicitly mark it:
+
+UNCONFIRMED / REQUIRES ANALYST VALIDATION
+
+Do NOT guess.
+
+============================================================
+PROJECT OBJECTIVE
+============================================================
+
+The current business process is performed manually in Excel.
+
+The objective is to automate it using roughly this architecture:
+
+Excel/XLSX
+    ↓
+GCS
+    ↓
+Airflow / Astronomer
+    ↓
+Validate workbook
+    ↓
+Read source sheets
+    ↓
+Standardize data
+    ↓
+Apply reference mappings/lookups
+    ↓
+Reproduce Excel calculations
+    ↓
+Monthly calculations
+    ↓
+YTD calculations
+    ↓
+Reproduce report/pivot logic
+    ↓
+Generate XLSX output
+    ↓
+Reconciliation
+    ↓
+GCS/archive/notification
+
+The most important requirement is:
+
+AUTOMATED OUTPUT MUST RECONCILE WITH THE CURRENT MANUAL EXCEL OUTPUT FOR THE SAME INPUT DATA.
+
+The business-facing French column names should remain in French where required.
+
+BigQuery/dbt are NOT part of the current calculation architecture unless the attached evidence specifically shows a need for them.
+
+============================================================
+ATTACHED FILES
+============================================================
+
+There are four Excel metadata/extraction files.
+
+They should represent approximately these categories:
+
+1. Workbook Structure Extraction
+   - workbook/sheet information
+   - sheet names
+   - dimensions
+   - headers
+   - hidden/visible state if available
+   - possibly formulas/counts
+
+2. Formula Pattern Extraction
+   - unique Excel formula patterns
+   - preferably R1C1 formulas
+   - sheet
+   - column
+   - row ranges
+   - formula frequency/count
+
+3. Named Range Extraction
+   - workbook-level named ranges
+   - sheet-level named ranges
+   - references
+   - formulas/constants if present
+
+4. PivotTable Extraction
+   - PivotTable names
+   - source references
+   - row fields
+   - column fields
+   - value fields
+   - filters
+   - calculated fields if available
+   - locations/output sheets
+
+DO NOT assume the filenames indicate their contents correctly.
+
+FIRST inspect all four files and identify what each actually contains.
+
+============================================================
+MANDATORY ANALYSIS APPROACH
+============================================================
+
+Do NOT generate implementation code immediately.
+
+Perform the analysis in the following order.
+
+PHASE 1 — FILE INVENTORY
+------------------------
+
+For each attached XLSX:
+
+Identify:
+
+- filename
+- worksheets inside the extraction file
+- number of metadata records
+- column names in the extraction
+- what type of workbook metadata it represents
+- whether anything appears incomplete, truncated, duplicated or malformed
+
+Create a table:
+
+| Extraction File | Purpose | Records | Important Fields | Quality Issues |
+
+Do not continue until all four files have been inspected.
+
+============================================================
+PHASE 2 — ORIGINAL WORKBOOK STRUCTURE
+============================================================
+
+Reconstruct the structure of the original workbook.
+
+For every original workbook sheet identify:
+
+- exact sheet name
+- visible / hidden / very hidden if known
+- approximate used range
+- row count
+- column count
+- header row if identifiable
+- whether it appears to be:
+  - source/detail data
+  - lookup/reference sheet
+  - calculation sheet
+  - report sheet
+  - pivot sheet
+  - staging/helper sheet
+  - unknown
+
+Produce:
+
+| Sheet | Type | Rows | Columns | Key Purpose | Evidence | Confidence |
+
+Use:
+
+CONFIRMED
+HIGH CONFIDENCE
+MEDIUM CONFIDENCE
+LOW CONFIDENCE
+UNKNOWN
+
+Do not invent purposes merely from sheet names.
+
+============================================================
+PHASE 3 — SOURCE DATA MODEL
+============================================================
+
+Identify likely source/detail sheets.
+
+For each source sheet document:
+
+- exact headers
+- inferred data type
+- whether column appears:
+  - source/input
+  - manually entered
+  - formula-derived
+  - lookup-derived
+  - report/helper
+  - unknown
+
+Create a schema table:
+
+| Sheet | Column | Type | Source/Derived | Evidence | Used By |
+
+Do not expose actual sensitive row values.
+
+============================================================
+PHASE 4 — FORMULA CATALOGUE
+============================================================
+
+Analyze ALL unique formula patterns.
+
+R1C1 formulas should be treated as the preferred normalized representation.
+
+For every formula pattern provide:
+
+FORMULA RULE ID:
+Example: FORMULA-001
+
+Sheet:
+Target column:
+Applicable row range:
+Formula frequency:
+R1C1 formula:
+Equivalent human-readable rule:
+
+Input columns/references:
+- ...
+
+Output:
+- ...
+
+Cross-sheet references:
+- ...
+
+Named ranges used:
+- ...
+
+Error handling:
+- IFERROR
+- ISBLANK
+- etc.
+
+Dependencies:
+- ...
+
+Confidence:
+- CONFIRMED / HIGH / MEDIUM / LOW
+
+Business interpretation:
+- Only if supported by evidence
+
+Do not simplify away important Excel behavior.
+
+Specifically identify usage of:
+
+- IF
+- IFS
+- AND
+- OR
+- IFERROR
+- VLOOKUP
+- HLOOKUP
+- XLOOKUP
+- INDEX/MATCH
+- SUMIF/SUMIFS
+- COUNTIF/COUNTIFS
+- AVERAGEIF(S)
+- ROUND
+- MIN/MAX
+- LEFT/RIGHT/MID
+- SEARCH/FIND
+- TEXT
+- DATE
+- YEAR
+- MONTH
+- DAY
+- EOMONTH
+- TODAY
+- OFFSET
+- INDIRECT
+- SUBTOTAL
+- AGGREGATE
+- array formulas
+- dynamic arrays
+- external workbook references
+
+If formulas vary within the same target column, document EACH distinct formula pattern and the row ranges where it applies.
+
+============================================================
+PHASE 5 — FORMULA DEPENDENCY GRAPH
+============================================================
+
+Build a dependency lineage.
+
+Example:
+
+Source column A
+      ↓
+Formula column B
+      ↓
+Formula column C
+      ↓
+PivotTable X
+      ↓
+Monthly report Y
+
+For every significant calculated field identify:
+
+SOURCE DATA
+    ↓
+INTERMEDIATE FIELDS
+    ↓
+FINAL FIELD
+    ↓
+REPORT/PIVOT USING IT
+
+Produce a dependency table:
+
+| Output Field | Direct Inputs | Intermediate Dependencies | Used By Report/Pivot |
+
+Also identify circular or suspicious dependencies if present.
+
+============================================================
+PHASE 6 — NAMED RANGES
+============================================================
+
+Analyze every named range.
+
+For each:
+
+- exact name
+- scope:
+  - workbook
+  - worksheet
+- destination/reference
+- whether static/dynamic
+- whether it contains:
+  - range
+  - formula
+  - constant
+  - external reference
+- sheets/columns affected
+- formulas using it
+- pivots using it if known
+- likely purpose based strictly on evidence
+
+Table:
+
+| Name | Scope | Reference | Type | Used By | Interpretation | Confidence |
+
+Highlight unused named ranges separately.
+
+============================================================
+PHASE 7 — LOOKUPS AND MAPPINGS
+============================================================
+
+Identify all lookup logic.
+
+For each lookup:
+
+LOOKUP ID:
+Source sheet:
+Target sheet/column:
+Lookup sheet/range:
+Lookup key:
+Return field:
+Match type:
+Default/fallback:
+Exact/approximate match:
+Formula or named range:
+Evidence:
+
+Translate Excel lookup behavior into implementation-neutral pseudocode.
+
+Example:
+
+LEFT JOIN source
+ON normalized(source.dealer_code)
+   = normalized(reference.dealer_code)
+
+RETURN reference.dealer_group
+
+But only if the Excel evidence supports that interpretation.
+
+============================================================
+PHASE 8 — PIVOTTABLE REVERSE ENGINEERING
+============================================================
+
+Analyze every PivotTable.
+
+For each PivotTable provide:
+
+PIVOT ID:
+Pivot name:
+Worksheet:
+Cell location:
+Source:
+Source range / table / cache:
+Row fields:
+Column fields:
+Value fields:
+Aggregation function for each value:
+Report filters:
+Page filters:
+Calculated fields:
+Sort order:
+Grouping:
+Date grouping:
+Formatting-relevant behavior if identifiable:
+
+Example:
+
+Pivot:
+    Pivot Pierre
+
+Rows:
+    Vendeur
+
+Columns:
+    Mois de retour
+
+Values:
+    Count of Contrat
+
+Filter:
+    Statut
+
+DO NOT use this example unless supported by the files.
+
+Document the ACTUAL pivot configuration.
+
+For each value field specify whether it uses:
+
+- SUM
+- COUNT
+- COUNTA
+- AVERAGE
+- MIN
+- MAX
+- DISTINCT COUNT
+- custom/calculated field
+
+============================================================
+PHASE 9 — REPORT RECONSTRUCTION
+============================================================
+
+Determine which sheets constitute final business reports.
+
+Possible report types may include, but are not limited to:
+
+- Remarketing
+- Repossession
+- monthly reports
+- YTD reports
+- KPI
+- ERA
+- seller reports
+- dealer reports
+- inventory reports
+
+Do not assume these from names alone.
+
+For each report:
+
+REPORT ID:
+Sheet:
+Purpose:
+Source sheets:
+Required calculated fields:
+PivotTables:
+Filters:
+Date logic:
+Grouping:
+Measures:
+Output fields:
+Cross-sheet dependencies:
+Named ranges:
+Unconfirmed rules:
+
+Produce:
+
+| Report | Sources | Calculations | Pivots | Filters | Output | Confidence |
+
+============================================================
+PHASE 10 — MONTHLY LOGIC
+============================================================
+
+Identify any logic specifically used for monthly reporting.
+
+Determine, where evidence exists:
+
+- which date determines reporting month
+- whether report month comes from:
+  - return date
+  - sale date
+  - maturity date
+  - another date
+- month filters
+- month/year derived columns
+- month-end calculations
+- rolling-month logic
+- report-period filters
+- previous-month dependencies
+
+Do NOT infer the date merely because a column is called "Mois".
+
+Provide:
+
+MONTHLY RULE MATRIX
+
+| Metric/Report | Reporting Date | Filter | Grouping | Aggregation | Evidence |
+
+Anything unclear must be marked:
+
+REQUIRES ANALYST VALIDATION
+
+============================================================
+PHASE 11 — YTD LOGIC
+============================================================
+
+Identify YTD logic.
+
+For each YTD metric/report determine:
+
+- start of reporting year
+- end period
+- accumulation rule
+- whether historical corrections alter subsequent months
+- whether YTD is recalculated from source or chained from previous outputs
+- whether formulas reference previous monthly sheets/files
+- whether PivotTables produce YTD
+
+Produce:
+
+YTD RULE MATRIX
+
+| Metric | Start | End | Inputs | Aggregation | Historical Rebuild Requirement |
+
+Pay special attention to historical corrections.
+
+Example business problem:
+
+A February source value is corrected in July.
+
+Determine from the workbook evidence whether:
+- February report must be regenerated
+- March–July YTD must be regenerated
+- only July YTD must be regenerated
+- another process applies
+
+If not provable:
+
+UNCONFIRMED — ANALYST INPUT REQUIRED
+
+============================================================
+PHASE 12 — INVENTORY / RETURN / SALE / AGE LOGIC
+============================================================
+
+Pay special attention to fields related to:
+
+- return
+- returned vehicles
+- inventory
+- sold/unsold
+- settlement
+- stock age
+- inventory age
+- age buckets
+- sale date
+- return date
+- maturity date
+- status
+- dealer
+- seller
+- channel
+
+For each identify:
+
+SOURCE FIELD(S)
+        ↓
+CALCULATION
+        ↓
+DERIVED FIELD
+        ↓
+REPORT USAGE
+
+There may already be workbook columns similar to:
+
+- aging nb.day
+- aging bucket
+- Stock Age (Sold)
+- Stock Age (All)
+- Stock Age (Unsold)
+- Age Bucket (Unsold)
+
+Determine whether they represent different business concepts.
+
+DO NOT combine them simply because their names look similar.
+
+============================================================
+PHASE 13 — BUSINESS RULE MATRIX
+============================================================
+
+Create a master business rule table.
+
+Use this exact format:
+
+| Rule ID | Business Output | Source Fields | Excel Formula/Logic | Target Field | Used By | Status | Confidence |
+
+Status must be one of:
+
+CONFIRMED_FROM_FORMULA
+CONFIRMED_FROM_PIVOT
+CONFIRMED_FROM_NAMED_RANGE
+INFERRED_WITH_HIGH_CONFIDENCE
+REQUIRES_ANALYST_VALIDATION
+
+Prefer CONFIRMED statuses.
+
+============================================================
+PHASE 14 — EDGE CASES
+============================================================
+
+Identify behavior for:
+
+- blank cells
+- null status
+- invalid dates
+- text dates
+- zero values
+- negative amounts
+- duplicate contracts
+- duplicate VINs
+- missing lookup match
+- formula errors
+- #N/A
+- #VALUE!
+- #REF!
+- empty strings returned by formulas
+- hidden records
+- filtered records
+- status spelling differences
+- trailing spaces
+- accented French text
+- case differences
+
+Do not decide behavior without evidence.
+
+============================================================
+PHASE 15 — EXTERNAL DEPENDENCIES
+============================================================
+
+Identify:
+
+- formulas referencing another workbook
+- external links
+- Power Query dependencies if represented
+- connections
+- macros/VBA if metadata suggests them
+- hidden reference sheets
+- external named ranges
+- hard-coded file paths
+
+Create:
+
+| Dependency | Type | Referenced From | Risk | Required for Automation |
+
+============================================================
+PHASE 16 — IMPLEMENTATION MAPPING
+============================================================
+
+After the workbook logic has been completely analyzed, map it to this Python project structure:
+
+include/remarketing/
+    calculations.py
+    excel_reader.py
+    data_validation.py
+    workbook_validation.py
+    standardization.py
+    mappings.py
+    monthly_reporting.py
+    ytd_reporting.py
+    pivot_reporting.py
+    report_builder.py
+    reconciliation.py
+
+For EACH confirmed rule specify which module should implement it.
+
+Example format:
+
+RULE: FORMULA-017
+Excel output:
+Source:
+Python module:
+Suggested function:
+Inputs:
+Output:
+Null handling:
+Test cases:
+
+Do not write the complete implementation yet.
+
+This section is an IMPLEMENTATION SPECIFICATION.
+
+============================================================
+PHASE 17 — TEST CASE GENERATION
+============================================================
+
+Create synthetic test cases.
+
+DO NOT use actual client/customer records.
+
+For every significant business rule generate:
+
+- normal case
+- null case
+- boundary case
+- invalid data case where applicable
+
+Example structure:
+
+TEST-RULE-001
+
+Input:
+    status = ...
+    return_date = ...
+    sale_date = ...
+
+Expected output:
+    ...
+
+Reason:
+    Based on FORMULA-001
+
+Use fabricated values only.
+
+============================================================
+PHASE 18 — RECONCILIATION SPECIFICATION
+============================================================
+
+Define how the future automated report should be reconciled with Excel.
+
+Create a reconciliation matrix.
+
+Possible categories, only when supported:
+
+| Reconciliation Item | Manual Source | Automated Source | Expected Difference |
+
+The expected difference should normally be:
+
+0
+
+Include:
+- row counts
+- contract counts
+- relevant status counts
+- inventory totals
+- monthly totals
+- YTD totals
+- PivotTable totals
+- financial totals where applicable
+
+============================================================
+PHASE 19 — OPEN QUESTIONS
+============================================================
+
+Create a consolidated section:
+
+# OPEN QUESTIONS FOR BUSINESS ANALYST
+
+Do NOT hide ambiguity.
+
+For every unknown provide:
+
+QUESTION ID:
+Area:
+What is known:
+What is unclear:
+Evidence:
+Why implementation depends on this answer:
+Possible interpretations:
+
+Do not choose an interpretation yourself.
+
+============================================================
+PHASE 20 — CONTRADICTIONS / SUSPICIOUS LOGIC
+============================================================
+
+Identify anything where:
+
+- formula logic conflicts between sheets
+- two columns with similar names calculate differently
+- PivotTable references differ from formulas
+- a named range points to unexpected cells
+- formulas change unexpectedly midway down a column
+- formulas contain hard-coded dates
+- formulas reference stale ranges
+- formulas reference deleted/missing sheets
+- calculations rely on manual values
+- formula pattern changes cannot be explained
+
+Do NOT silently normalize these discrepancies.
+
+Create:
+
+# POTENTIAL WORKBOOK ISSUES
+
+with evidence for every issue.
+
+============================================================
+FINAL REQUIRED OUTPUT
+============================================================
+
+Generate ONE comprehensive Markdown document named:
+
+WORKBOOK_LOGIC_SPEC.md
+
+Use the following exact top-level structure:
+
+# Workbook Logic Specification
+
+## 1. Executive Summary
+## 2. Extraction Files Reviewed
+## 3. Original Workbook Architecture
+## 4. Source Data Model
+## 5. Formula Catalogue
+## 6. Formula Dependency Lineage
+## 7. Named Ranges
+## 8. Lookup and Mapping Rules
+## 9. PivotTable Definitions
+## 10. Report Definitions
+## 11. Monthly Reporting Logic
+## 12. YTD Reporting Logic
+## 13. Inventory / Return / Sale / Age Logic
+## 14. Master Business Rule Matrix
+## 15. Null and Edge-Case Handling
+## 16. External Dependencies
+## 17. Python Implementation Mapping
+## 18. Synthetic Test Cases
+## 19. Reconciliation Specification
+## 20. Potential Workbook Issues
+## 21. Open Questions for Business Analyst
+## 22. Implementation Readiness Assessment
+
+============================================================
+IMPLEMENTATION READINESS ASSESSMENT
+============================================================
+
+At the end provide counts:
+
+Confirmed business rules:
+High-confidence inferred rules:
+Rules requiring analyst validation:
+Unique formula patterns:
+PivotTables:
+Named ranges:
+External dependencies:
+Potential workbook issues:
+
+Then classify overall readiness as one of:
+
+READY_FOR_IMPLEMENTATION
+
+PARTIALLY_READY_FOR_IMPLEMENTATION
+
+NOT_READY_FOR_IMPLEMENTATION
+
+Explain why.
+
+IMPORTANT:
+
+Do NOT call the workbook fully understood simply because formulas were extracted.
+
+The most important distinction is:
+
+TECHNICAL FORMULA UNDERSTANDING
+versus
+BUSINESS MEANING CONFIRMATION.
+
+A formula can be technically understood but still require business confirmation.
+
+============================================================
+CRITICAL FINAL INSTRUCTION
+============================================================
+
+Do not optimize, rewrite, or modernize the business logic yet.
+
+The goal of this task is:
+
+REVERSE ENGINEER THE EXISTING EXCEL PROCESS AS-IS.
+
+We want an exact specification of the existing behavior before deciding what should be changed.
+
+Read and cross-reference ALL FOUR attached XLSX files before producing the final document.
+
+If evidence from different extraction files conflicts, report the conflict.
+
+Never resolve a conflict through assumption.
