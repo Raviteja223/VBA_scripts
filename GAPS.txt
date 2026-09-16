@@ -1,0 +1,318 @@
+You previously created WORKBOOK_LOGIC_SPEC.md and concluded:
+
+PARTIALLY_READY_FOR_IMPLEMENTATION
+
+Do NOT implement the Python automation yet.
+
+Your next task is to close as many evidence gaps as possible using ONLY files available inside this approved environment.
+
+Current known blockers are:
+
+1. Original header-to-column mappings are missing.
+2. Several material formulas contain #REF!.
+3. Pivot value-field names and aggregation functions were not extracted.
+4. Pivot filters and grouping configuration are unavailable.
+5. External workbook dependencies require controlled ingestion/governance.
+6. Monthly reporting-date rules and YTD rebuild behavior are not fully proven.
+7. Multiple similar aging calculations use materially different formulas and bucket boundaries.
+
+I want a targeted evidence-recovery phase.
+
+============================================================
+GOAL
+============================================================
+
+Determine which gaps can be resolved technically from the workbook and which genuinely require analyst/business confirmation.
+
+Do NOT guess.
+
+Do NOT simplify similar-looking calculations into one rule.
+
+============================================================
+PHASE 1 — HEADER / FORMULA MAPPING
+============================================================
+
+Using the original workbook if available, reconstruct an exact mapping:
+
+Sheet
+Excel column number
+Excel column letter
+Header row
+Exact header text
+Formula target column
+Formula pattern IDs
+
+Produce:
+
+| Sheet | Column # | Letter | Header | Source/Derived | Formula IDs |
+
+For every formula rule in WORKBOOK_LOGIC_SPEC.md, identify its exact target business header.
+
+If the header is blank or merged, state that explicitly.
+
+============================================================
+PHASE 2 — #REF! INVESTIGATION
+============================================================
+
+Find every formula containing:
+
+#REF!
+
+For each occurrence determine:
+
+- sheet
+- cell
+- target column/header
+- complete formula
+- normalized formula pattern
+- frequency
+- whether the broken reference appears to be:
+  - deleted column
+  - deleted worksheet
+  - external workbook
+  - malformed formula
+  - unknown
+
+Create:
+
+| Issue ID | Sheet | Cell/Range | Target Header | Formula | Likely Cause | Business Impact |
+
+DO NOT repair formulas automatically.
+
+If the original workbook itself contains the broken reference, mark:
+
+SOURCE_WORKBOOK_DEFECT
+
+============================================================
+PHASE 3 — EXTERNAL LINK INVENTORY
+============================================================
+
+Inspect the original workbook for:
+
+- external workbook links
+- workbook connections
+- Power Query connections
+- ODBC/OLEDB connections
+- data model connections
+- external named ranges
+- formulas containing [workbook.xlsx]
+- linked files
+- hard-coded network/local paths
+
+Produce:
+
+| Dependency ID | Type | Target | Used By | Required? | Availability | Risk |
+
+Do not open or transmit external files unless permitted.
+
+============================================================
+PHASE 4 — PIVOT EXTRACTION
+============================================================
+
+The previous metadata extraction was insufficient.
+
+If this environment is Windows with Microsoft Excel installed, prefer
+Excel's native object model (COM/VBA) for this investigation because
+openpyxl may not expose enough PivotTable metadata.
+
+For EVERY PivotTable extract:
+
+- worksheet
+- PivotTable name
+- source/cached source
+- destination range
+- row fields and order
+- column fields and order
+- value fields
+- source field for every value
+- displayed value-field name
+- aggregation function:
+  SUM
+  COUNT
+  COUNTA
+  AVERAGE
+  MIN
+  MAX
+  PRODUCT
+  STDEV
+  STDEVP
+  VAR
+  VARP
+  DISTINCT COUNT
+  CALCULATED FIELD
+  other
+- report filters
+- selected filter values
+- multiple-item selection state
+- hidden items
+- date grouping
+- numeric grouping
+- group boundaries
+- calculated fields/items
+- sorting
+- grand totals
+- subtotals
+- Show Values As settings if present
+
+Produce an exact PivotTable specification.
+
+Do not infer aggregation based on displayed values.
+
+============================================================
+PHASE 5 — AGING CALCULATION SEPARATION
+============================================================
+
+Investigate these and every related field independently:
+
+aging nb.day
+aging bucket
+Stock Age (Sold)
+Stock Age (All)
+Stock Age (Unsold)
+Age Bucket (Unsold)
+
+For EACH field determine:
+
+- exact formula pattern(s)
+- source date(s)
+- status condition(s)
+- report date / TODAY / month-end usage
+- handling of sold records
+- handling of unsold records
+- handling of blanks
+- bucket boundaries
+- downstream PivotTables/reports
+
+Produce:
+
+| Field | Exact Logic | Date Basis | Status Basis | Buckets | Used By |
+
+Never merge two rows in this table unless the formulas are provably identical.
+
+============================================================
+PHASE 6 — MONTHLY REPORTING EVIDENCE
+============================================================
+
+Using formulas, pivots, report sheets and any available workbook metadata,
+determine for each report/metric which date drives the reporting month.
+
+Possible dates include, but are not limited to:
+
+Date de retour
+date vente
+date revente
+DateMaturite
+date proposition
+
+For each metric/report:
+
+| Report/Metric | Reporting Date Field | Month Filter | Evidence | Confidence |
+
+If evidence is insufficient, mark:
+
+ANALYST_CONFIRMATION_REQUIRED
+
+Do not choose a date because its name appears plausible.
+
+============================================================
+PHASE 7 — YTD / HISTORICAL CORRECTION
+============================================================
+
+Investigate whether YTD is:
+
+A. recalculated directly from source data through report period
+B. chained from prior monthly output
+C. produced by a PivotTable
+D. based on another workbook/report
+E. mixed
+
+Search formulas and dependencies for prior-month references.
+
+Specifically address this scenario:
+
+A February source record is corrected in July.
+
+Determine whether workbook evidence proves which of these happens:
+
+- February only is regenerated
+- February through July reports are regenerated
+- only July YTD is regenerated from raw source
+- prior monthly workbooks are chained
+- another process applies
+
+If workbook evidence cannot establish the process, keep:
+
+ANALYST_CONFIRMATION_REQUIRED
+
+============================================================
+PHASE 8 — DETERMINE WHAT CAN NOW BE IMPLEMENTED
+============================================================
+
+Update WORKBOOK_LOGIC_SPEC.md.
+
+Classify every rule as:
+
+CONFIRMED_FROM_FORMULA
+CONFIRMED_FROM_PIVOT
+CONFIRMED_FROM_WORKBOOK_STRUCTURE
+CONFIRMED_FROM_EXTERNAL_DEPENDENCY
+INFERRED_WITH_HIGH_CONFIDENCE
+ANALYST_CONFIRMATION_REQUIRED
+SOURCE_WORKBOOK_DEFECT
+
+Then provide:
+
+Confirmed row-level rules:
+Confirmed lookup rules:
+Confirmed aging rules:
+Confirmed PivotTables:
+Confirmed monthly rules:
+Confirmed YTD rules:
+External dependencies unresolved:
+#REF defects unresolved:
+Analyst questions remaining:
+
+============================================================
+FINAL OUTPUTS
+============================================================
+
+Produce:
+
+1. UPDATED_WORKBOOK_LOGIC_SPEC.md
+
+2. EVIDENCE_GAP_REPORT.md
+
+3. PIVOT_SPECIFICATION.md
+
+4. EXTERNAL_DEPENDENCIES.md
+
+5. ANALYST_QUESTIONS.md
+
+6. IMPLEMENTATION_READINESS_V2.md
+
+The final readiness must be one of:
+
+READY_FOR_CORE_IMPLEMENTATION
+PARTIALLY_READY_FOR_CORE_IMPLEMENTATION
+READY_FOR_FULL_REPORT_IMPLEMENTATION
+NOT_READY
+
+Clearly distinguish:
+
+CORE DATA/CALCULATION IMPLEMENTATION
+
+from:
+
+FULL EXCEL REPORT REPRODUCTION
+
+Do not classify the project as ready for full report implementation unless
+monthly/YTD/report/PivotTable behavior is actually supported by evidence.
+
+============================================================
+CRITICAL RULE
+============================================================
+
+Technical uncertainty must remain visible.
+
+Never convert missing evidence into an implementation assumption just to
+increase readiness.
