@@ -1,0 +1,59 @@
+ANALYST MEETING TRANSCRIPT
+
+Use this wording during the meeting. Explain our understanding first, pause for the analyst's answer, and record exact sheet names, column names, rules, filters, and examples.
+
+
+OPENING
+
+Candidate: Thank you for connecting with me. I will first explain our understanding, and I would like you to correct anything that is wrong. We understand that you will upload the actual data workbook. Automation will then validate the data and generate the final KPIs, report sheets, charts, and exception reports. You will not manually prepare the final reports. Is this correct?
+
+
+INPUT FILES AND DATA SHEETS
+
+Candidate: We identified Remarketing as the main reporting data sheet. We also found Repossession, FSA-UPDATE, and a retraction or commitment sheet. Please confirm which sheets are official inputs and which are only supporting or old working sheets.
+
+Candidate: For every required input sheet, what information does it contain, and which sheet should be treated as the authoritative source if the same information appears in more than one place?
+
+Candidate: Will input sheet names, column names, and column meanings remain the same each month? If a dated sheet name changes, what stable naming pattern should automation follow?
+
+Candidate: Our understanding is that all external links and formulas will be refreshed and the workbook will be saved before upload. How do you confirm that refresh has completed and that no required source still contains old values?
+
+Candidate: How should automation determine the reporting month and cutoff date? Is the period provided separately, read from a cell, or derived from a date column in the data?
+
+Candidate: Which input columns are mandatory? If a required sheet, column, date, contract, VIN, or financial value is missing, should report generation stop or continue with a warning?
+
+Candidate: The workbook may contain blank values, duplicate records, #N/A values, or broken references. Which cases are acceptable, and which cases must prevent publication?
+
+
+FINAL OUTPUT REPORTS
+
+Candidate: We identified KPIs, Pivot Pierre, Pivot Soraya, VENTES, Feuil3, Solde a checker offensive, suivi offensivetracker, and possibly Repossession as final outputs. Please confirm which are official deliverables and which are only personal, temporary, or supporting sheets.
+
+Candidate: For each required report, please explain its business purpose, who receives it, and which tables, sections, totals, and charts must appear. Are any existing sections no longer required?
+
+Candidate: We observed filters for reporting month, year, FSA, Restituable, Offensive, status, seller, dealer, model, fuel type, and sale or return dates. Which filters and default selections apply to each report? Are these fixed or can they change each month?
+
+
+EXCEPTION AND MANUAL REPORTS
+
+Candidate: Our understanding is that Solde a checker offensive and suivi offensivetracker contain contracts that need review or follow-up. What exact conditions add a contract to these reports, and what conditions remove it?
+
+Candidate: Which fields, comments, classifications, or values do you currently change manually? Who makes these decisions, and should the changes be automated or remain a human review step?
+
+Candidate: Should manual comments or overrides be carried into later reports? If yes, where should they be stored and how should they be matched to the correct contract or VIN?
+
+
+VERIFICATION AND REFERENCE EXAMPLES
+
+Candidate: Before approving the final workbook, which control totals do you check? For example, do you verify total contracts, sold and unsold counts, FSA counts, monthly totals, seller or dealer totals, and total profit or loss?
+
+Candidate: Which values must match exactly, and is any small difference acceptable for currency, averages, or percentages?
+
+Candidate: Can you provide one refreshed input workbook and its matching approved final report for the same month? Please also identify any manual changes made between input and final output.
+
+Candidate: If possible, can you provide a second month containing exceptions, missing values, duplicate records, or manual corrections? This will help us confirm that automation handles unusual cases correctly.
+
+
+CLOSING
+
+Candidate: Let me summarize our understanding. You will upload a refreshed actual-data workbook. Automation will validate the required sheets and fields, apply the approved business rules and filters, generate all confirmed reports, preserve required formatting and color definitions, and reconcile the output before publication. We will prove the result by comparing it with analyst-approved reports for the same input data. Have we missed any important input, calculation, report, manual step, or validation check?
